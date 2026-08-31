@@ -1,0 +1,44 @@
+{
+  "compilerOptions": {
+    // ---- How we run -------------------------------------------------------
+    // We never turn .ts into .js. Node 22.18+ reads a .ts file, deletes the type
+    // annotations in memory, and runs what is left. So `node src/index.ts` works
+    // directly and there is no build step and no dist/ folder.
+    // TypeScript is here only as a checker: `npx tsc` reports mistakes.
+    "noEmit": true,
+
+    // Node needs the real filename in an import: `./logReader.ts`.
+    // TypeScript normally forbids a `.ts` extension in imports (it expects you to
+    // import the compiled `.js`). Since we never compile, we allow it.
+    "allowImportingTsExtensions": true,
+
+    // Node can only DELETE types, it cannot generate code. A few TypeScript
+    // features need generated code and would crash at runtime. This flag makes
+    // the compiler reject them up front so we find out now, not later.
+    "erasableSyntaxOnly": true,
+
+    // Forces `import type { Foo }` when Foo is only a type. Without this, Node
+    // would try to import Foo as a real value at runtime and fail, because the
+    // type vanished when the annotations were stripped.
+    "verbatimModuleSyntax": true,
+
+    // ---- What we target ---------------------------------------------------
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023"],
+    "types": ["node"],
+
+    // ---- How strict -------------------------------------------------------
+    // The single most useful flag in TypeScript. Its most important effect is
+    // that a value which might be null or undefined cannot be used until you
+    // have handled that case.
+    "strict": true,
+
+    // Reading past the end of an array or string gives `undefined`, not a value.
+    // This makes TypeScript admit that. It costs a little effort at every index,
+    // and in a byte parser it is exactly the mistake we most want caught.
+    "noUncheckedIndexedAccess": true
+  },
+  "include": ["src/**/*.ts"]
+}

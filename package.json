@@ -1,0 +1,17 @@
+{
+  "name": "obu-telemetry-solution",
+  "version": "0.1.0",
+  "description": "Parser for JT/T 808 telemetry frames from bus on-board units",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "parse": "node src/index.ts"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}
