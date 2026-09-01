@@ -4,11 +4,13 @@
  * This is the only file that knows the order the steps happen in. Each step
  * lives in its own module and does one job; this file wires them together.
  *
- * So far: step 1 (read the log) feeds step 2 (verify the frame).
+ * So far: step 1 (read the log) -> step 2 (verify the frame)
+ *      -> step 3 (split the header from the body).
  */
 
 import { readCaptureFile } from './logReader.ts';
-import { readFrame, unescape, checksum } from './transport.ts';
+import { readFrame, unescape } from './transport.ts';
+import { decodeHeader, formatMessageId } from './header.ts';
 
 // The dataset. Not a default and not a configurable input — these three files
 // are the entire data source the exercise provides, listed explicitly so it is
@@ -26,14 +28,32 @@ let notFrames = 0;
 let badEscapes = 0;
 let badChecks = 0;
 
-// We keep a couple of interesting examples to print at the end, because a
-// number in a summary is not the same as seeing the actual bytes.
+// Step 3 totals.
+let headersDecoded = 0;
+let headersTooShort = 0;
+let badDeviceIds = 0;
+let lengthMismatches = 0;
+let encrypted = 0;
+let subPackaged = 0;
+
+// A Map remembers insertion order and lets us count by a key. `Map<number, number>`
+// reads as "keys are numbers, values are numbers" — here, message id -> how many.
+const countByMessageId = new Map<number, number>();
+const countByDevice = new Map<string, number>();
+
+// We keep an example or two to print at the end, because a number in a summary
+// is not the same as seeing the actual bytes.
 let escapedExample: Buffer | undefined;
+let headerExample: { hex: string; text: string } | undefined;
+
+/** Add one to a counter held in a Map, starting it at 0 if it is not there yet. */
+function bump<K>(counter: Map<K, number>, key: K): void {
+  counter.set(key, (counter.get(key) ?? 0) + 1);
+}
 
 for (const file of CAPTURE_FILES) {
   const { records } = readCaptureFile(file);
 
-  // Per-file counters, so the summary shows which file the oddities are in.
   let fileVerified = 0;
   let fileRejected = 0;
 
@@ -42,18 +62,51 @@ for (const file of CAPTURE_FILES) {
 
     const result = readFrame(record.rawBytes);
 
-    // `result.kind` decides which shape `result` has. TypeScript will not let us
-    // read `result.expected` until we are inside the 'bad-check' branch, which
-    // is exactly what stops us from silently ignoring a failure.
+    // `result.kind` decides which shape `result` has, so we can access the right fields for each case.
     switch (result.kind) {
       case 'ok':
         verified++;
         fileVerified++;
 
-        // Hold on to the first frame that actually contained an escape, so we
-        // can show the before/after below.
         if (escapedExample === undefined && record.rawBytes.includes(0x7d)) {
           escapedExample = record.rawBytes;
+        }
+
+        // ---- step 3 ----------------------------------------------------
+        {
+          const parsed = decodeHeader(result.frame.content);
+
+          if (parsed.kind === 'too-short') {
+            headersTooShort++;
+          } else if (parsed.kind === 'bad-device-id') {
+            badDeviceIds++;
+          } else {
+            headersDecoded++;
+            bump(countByMessageId, parsed.header.messageId);
+            bump(countByDevice, parsed.header.deviceId);
+
+            if (parsed.header.encryption !== 0) encrypted++;
+            if (parsed.header.isSubPackage) subPackaged++;
+
+            // The header claims a body length. Compare it against the body we
+            // actually have. Agreement is evidence the framing is right; a
+            // mismatch would mean we had mis-split something.
+            if (parsed.body.length !== parsed.header.declaredBodyLength) {
+              lengthMismatches++;
+            }
+
+            if (headerExample === undefined) {
+              const h = parsed.header;
+              headerExample = {
+                hex: result.frame.content.subarray(0, 12).toString('hex').toUpperCase(),
+                text:
+                  `messageId=${formatMessageId(h.messageId)} ` +
+                  `device=${h.deviceId} serial=${h.serial} ` +
+                  `bodyLength=${h.declaredBodyLength} (actual ${parsed.body.length}) ` +
+                  `encryption=${h.encryption} subPackage=${h.isSubPackage}`,
+              };
+            }
+          }
         }
         break;
 
@@ -97,11 +150,30 @@ console.log(`  not a frame          ${notFrames}`);
 console.log(`  bad escape sequence  ${badEscapes}`);
 console.log(`  check-code failures  ${badChecks}`);
 
+console.log('\n  --- header summary ---');
+console.log(`  headers decoded      ${headersDecoded}`);
+console.log(`  too short for header ${headersTooShort}`);
+console.log(`  invalid device id    ${badDeviceIds}`);
+console.log(`  body length mismatch ${lengthMismatches}`);
+console.log(`  encrypted bodies     ${encrypted}`);
+console.log(`  sub-package frames   ${subPackaged}`);
+
+console.log('\n  --- message types ---');
+// Sort by count, highest first, so the common types are at the top.
+for (const [id, count] of [...countByMessageId].sort((a, b) => b[1] - a[1])) {
+  console.log(`  ${formatMessageId(id)}  ${String(count).padStart(5)}`);
+}
+
+console.log('\n  --- devices ---');
+for (const [device, count] of [...countByDevice].sort((a, b) => a[0].localeCompare(b[0]))) {
+  console.log(`  ${device}  ${String(count).padStart(5)} frames`);
+}
+
 // Show one real escaped frame, so the escaping is visible rather than just
 // asserted in a comment.
 if (escapedExample !== undefined) {
-  const inner = escapedExample.subarray(1, escapedExample.length - 1);
-  const message = unescape(inner);
+  const inner = escapedExample.subarray(1, escapedExample.length - 1); // original bytes, still escaped, without the 0x7E markers
+  const message = unescape(inner); // unescaped bytes
 
   console.log('\n  --- a real frame that contains an escape ---');
   console.log(`  on the wire     ${escapedExample.toString('hex').toUpperCase()}`);
@@ -112,10 +184,8 @@ if (escapedExample !== undefined) {
   );
 }
 
-// The worked example from PROTOCOL.md, checked against our own code.
-// "XOR of 0002 0000 008800000001 00BC = 0x37, which matches the check byte."
-const specExample = Buffer.from('0002000000880000000100BC', 'hex');
-console.log(
-  `  PROTOCOL.md baseline heartbeat checksum: ` +
-    `0x${checksum(specExample).toString(16)} (spec says 0x37)\n`,
-);
+if (headerExample !== undefined) {
+  console.log('\n  --- first header, decoded ---');
+  console.log(`  bytes   ${headerExample.hex}`);
+  console.log(`  fields  ${headerExample.text}\n`);
+}
