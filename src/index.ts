@@ -1,73 +1,121 @@
 /**
- * The program you actually run.
+ * The program you actually run:  npm run parse
  *
- *   npm run parse                          reads all three captures
- *   node src/index.ts data/day1/capture-14.log    reads just the one you name
+ * This is the only file that knows the order the steps happen in. Each step
+ * lives in its own module and does one job; this file wires them together.
  *
- * Right now it only proves Step 1 works: it reads the files and reports what it
- * found. Decoding arrives in later steps.
+ * So far: step 1 (read the log) feeds step 2 (verify the frame).
  */
 
 import { readCaptureFile } from './logReader.ts';
+import { readFrame, unescape, checksum } from './transport.ts';
 
-/** Used when you run the program without naming any files. */
-const DEFAULT_FILES = [
+// The dataset. Not a default and not a configurable input — these three files
+// are the entire data source the exercise provides, listed explicitly so it is
+// obvious what was parsed to produce the numbers below.
+const CAPTURE_FILES = [
   'data/day1/capture-14.log',
   'data/day2/capture-13.log',
   'data/day2/capture-14.log',
 ];
 
-// process.argv is the list of words typed on the command line. Position 0 is the
-// path to node itself and position 1 is the path to this script, so the
-// arguments a human actually typed start at position 2.
-const requestedFiles = process.argv.slice(2);
-const files = requestedFiles.length > 0 ? requestedFiles : DEFAULT_FILES;
+// Running totals for the whole run.
+let payloads = 0;
+let verified = 0;
+let notFrames = 0;
+let badEscapes = 0;
+let badChecks = 0;
 
-let totalRecords = 0;
-let totalIgnored = 0;
-let totalBytes = 0;
+// We keep a couple of interesting examples to print at the end, because a
+// number in a summary is not the same as seeing the actual bytes.
+let escapedExample: Buffer | undefined;
 
-for (const file of files) {
-  const { records, ignoredLines } = readCaptureFile(file);
+for (const file of CAPTURE_FILES) {
+  const { records } = readCaptureFile(file);
 
-  // Add up the sizes of every payload in this file.
-  //
-  // `reduce` walks the list carrying a running total: `sum` is the total so far
-  // and `record` is the current item. The 0 at the end is where the total starts.
-  const bytes = records.reduce((sum, record) => sum + record.rawBytes.length, 0);
+  // Per-file counters, so the summary shows which file the oddities are in.
+  let fileVerified = 0;
+  let fileRejected = 0;
 
-  totalRecords += records.length;
-  totalIgnored += ignoredLines;
-  totalBytes += bytes;
+  for (const record of records) {
+    payloads++;
 
-  // padStart lines the numbers up in a column so the output is readable.
+    const result = readFrame(record.rawBytes);
+
+    // `result.kind` decides which shape `result` has. TypeScript will not let us
+    // read `result.expected` until we are inside the 'bad-check' branch, which
+    // is exactly what stops us from silently ignoring a failure.
+    switch (result.kind) {
+      case 'ok':
+        verified++;
+        fileVerified++;
+
+        // Hold on to the first frame that actually contained an escape, so we
+        // can show the before/after below.
+        if (escapedExample === undefined && record.rawBytes.includes(0x7d)) {
+          escapedExample = record.rawBytes;
+        }
+        break;
+
+      case 'not-a-frame':
+        notFrames++;
+        fileRejected++;
+        break;
+
+      case 'bad-escape':
+        badEscapes++;
+        fileRejected++;
+        break;
+
+      case 'bad-check':
+        // The brief: report these, do not silently drop and do not silently
+        // accept. Printing every one would be noise if there were thousands, so
+        // we count them and show the first few.
+        badChecks++;
+        fileRejected++;
+        if (badChecks <= 5) {
+          console.log(
+            `  CHECK FAILED ${record.sourceFile}:${record.lineNumber} ` +
+              `expected 0x${result.expected.toString(16).padStart(2, '0')} ` +
+              `got 0x${result.actual.toString(16).padStart(2, '0')}`,
+          );
+        }
+        break;
+    }
+  }
+
   console.log(
     `  ${file.padEnd(28)} ${String(records.length).padStart(5)} payloads  ` +
-      `${String(bytes).padStart(7)} bytes  ${ignoredLines} ignored`,
+      `${String(fileVerified).padStart(5)} verified  ${fileRejected} rejected`,
   );
 }
 
-console.log(`\n  ${'TOTAL'.padEnd(28)} ${String(totalRecords).padStart(5)} payloads  ` +
-  `${String(totalBytes).padStart(7)} bytes  ${totalIgnored} ignored\n`);
+console.log('\n  --- transport summary ---');
+console.log(`  payloads read        ${payloads}`);
+console.log(`  frames verified      ${verified}`);
+console.log(`  not a frame          ${notFrames}`);
+console.log(`  bad escape sequence  ${badEscapes}`);
+console.log(`  check-code failures  ${badChecks}`);
 
-// Show one record in full, as a sanity check that the pieces really were pulled
-// apart correctly. Reading a number in a summary is not the same as seeing the
-// actual thing.
-const [firstFile] = files;
-if (firstFile !== undefined) {
-  const { records } = readCaptureFile(firstFile);
-  const first = records[0];
+// Show one real escaped frame, so the escaping is visible rather than just
+// asserted in a comment.
+if (escapedExample !== undefined) {
+  const inner = escapedExample.subarray(1, escapedExample.length - 1);
+  const message = unescape(inner);
 
-  if (first !== undefined) {
-    console.log('  First record in detail:');
-    console.log(`    file        ${first.sourceFile}:${first.lineNumber}`);
-    console.log(`    arrived at  ${first.arrivedAt.toString()}`);
-    console.log(`    from        ${first.peerHost}:${first.peerPort}`);
-    console.log(`    bytes       ${first.rawBytes.length}`);
-
-    // .toString('hex') turns the bytes back into readable hex so we can compare
-    // against the original line in the log file by eye.
-    console.log(`    as hex      ${first.rawBytes.toString('hex').toUpperCase()}`);
-    console.log('');
-  }
+  console.log('\n  --- a real frame that contains an escape ---');
+  console.log(`  on the wire     ${escapedExample.toString('hex').toUpperCase()}`);
+  console.log(`  unescaped       ${message?.toString('hex').toUpperCase()}`);
+  console.log(
+    `  length          ${inner.length} bytes on the wire -> ` +
+      `${message?.length} bytes of message`,
+  );
 }
+
+// The worked example from PROTOCOL.md, checked against our own code.
+// "XOR of 0002 0000 008800000001 00BC = 0x37, which matches the check byte."
+const specExample = Buffer.from('0002000000880000000100BC', 'hex');
+console.log(
+  `  PROTOCOL.md baseline heartbeat checksum: ` +
+    `0x${checksum(specExample).toString(16)} (spec says 0x37)\n`,
+);
