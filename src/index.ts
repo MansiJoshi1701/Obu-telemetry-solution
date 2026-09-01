@@ -88,9 +88,8 @@ for (const file of CAPTURE_FILES) {
             if (parsed.header.encryption !== 0) encrypted++;
             if (parsed.header.isSubPackage) subPackaged++;
 
-            // The header claims a body length. Compare it against the body we
-            // actually have. Agreement is evidence the framing is right; a
-            // mismatch would mean we had mis-split something.
+            // Compare the actual body length to the calculated length (from body attributes)
+            // A mismatch would mean we had mis-split something.
             if (parsed.body.length !== parsed.header.declaredBodyLength) {
               lengthMismatches++;
             }
