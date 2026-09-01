@@ -11,6 +11,7 @@
 import { readCaptureFile } from './logReader.ts';
 import { readFrame, unescape } from './transport.ts';
 import { decodeHeader, formatMessageId } from './header.ts';
+import { decodeBody, messageName } from './bodies.ts';
 
 // The dataset. Not a default and not a configurable input — these three files
 // are the entire data source the exercise provides, listed explicitly so it is
@@ -36,10 +37,25 @@ let lengthMismatches = 0;
 let encrypted = 0;
 let subPackaged = 0;
 
+// Step 4 totals.
+let bodiesDecoded = 0;
+let bodiesWithoutDecoder = 0;
+let undecodedBodyBytes = 0;
+
 // A Map remembers insertion order and lets us count by a key. `Map<number, number>`
 // reads as "keys are numbers, values are numbers" — here, message id -> how many.
 const countByMessageId = new Map<number, number>();
 const countByDevice = new Map<string, number>();
+
+// A Set holds each distinct value once. We use it to show every different
+// authentication code in the data, which is also how we would notice if a body
+// contained something other than the printable text we expect.
+const authCodes = new Set<string>();
+
+// Bytes we could not account for, split by which message id they belonged to,
+// so the step 9 tally can say WHERE the undecoded bytes are rather than just
+// how many there are.
+const undecodedByMessageId = new Map<number, number>();
 
 // We keep an example or two to print at the end, because a number in a summary
 // is not the same as seeing the actual bytes.
@@ -92,6 +108,24 @@ for (const file of CAPTURE_FILES) {
             // A mismatch would mean we had mis-split something.
             if (parsed.body.length !== parsed.header.declaredBodyLength) {
               lengthMismatches++;
+            }
+
+            // ---- step 4 ------------------------------------------------
+            const decoded = decodeBody(parsed.header, parsed.body);
+
+            if (decoded.value === null) bodiesWithoutDecoder++;
+            else bodiesDecoded++;
+
+            if (decoded.value?.type === 'authentication') {
+              authCodes.add(decoded.value.authCode);
+            }
+
+            if (decoded.undecodedBytes > 0) {
+              undecodedBodyBytes += decoded.undecodedBytes;
+              undecodedByMessageId.set(
+                parsed.header.messageId,
+                (undecodedByMessageId.get(parsed.header.messageId) ?? 0) + decoded.undecodedBytes,
+              );
             }
 
             if (headerExample === undefined) {
@@ -157,10 +191,26 @@ console.log(`  body length mismatch ${lengthMismatches}`);
 console.log(`  encrypted bodies     ${encrypted}`);
 console.log(`  sub-package frames   ${subPackaged}`);
 
+console.log('\n  --- body summary ---');
+console.log(`  bodies decoded       ${bodiesDecoded}`);
+console.log(`  no decoder yet       ${bodiesWithoutDecoder}`);
+console.log(`  undecoded body bytes ${undecodedBodyBytes}`);
+
 console.log('\n  --- message types ---');
 // Sort by count, highest first, so the common types are at the top.
 for (const [id, count] of [...countByMessageId].sort((a, b) => b[1] - a[1])) {
-  console.log(`  ${formatMessageId(id)}  ${String(count).padStart(5)}`);
+  // A name means PROTOCOL.md documents this id. No name means it appears in no
+  // vendor document we hold, which is a finding rather than a parser gap.
+  const name = messageName(id) ?? 'NOT IN PROTOCOL.md';
+  const undecoded = undecodedByMessageId.get(id) ?? 0;
+  console.log(
+    `  ${formatMessageId(id)}  ${String(count).padStart(5)}  ${name.padEnd(20)}` +
+      (undecoded > 0 ? `${undecoded} bytes undecoded` : ''),
+  );
+}
+
+if (authCodes.size > 0) {
+  console.log(`\n  distinct authentication codes (0x0102): ${[...authCodes].join(', ')}`);
 }
 
 console.log('\n  --- devices ---');
