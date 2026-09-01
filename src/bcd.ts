@@ -19,37 +19,33 @@
  */
 
 /**
- * Read BCD bytes as the decimal digits they encode.
+ * Read BCD bytes as the decimal digits they encode, or null if they are not
+ * valid BCD.
  *
- * Node already renders a Buffer as one hex character per nibble, which is
- * exactly the split BCD is defined in terms of. And because every valid BCD
- * nibble is 0-9, the hex character and the decimal digit are the same character.
- * So `toString('hex')` IS the BCD reading — no shifting or masking needed.
+ * How it works: Node already renders a Buffer as one hex character per nibble,
+ * which is exactly the split BCD is defined in terms of. And because every
+ * valid BCD nibble is 0-9, the hex character and the decimal digit are the same
+ * character. So `toString('hex')` IS the BCD reading — no shifting or masking.
  *
- * The two encodings only diverge on nibbles above 9, and those are invalid BCD
- * anyway. There they show up as the letters a-f, which `isValidBcd` rejects.
+ * The two readings only diverge on nibbles above 9, which are not valid BCD at
+ * all. Those arrive as the letters a-f, and the test below rejects them.
  *
- * Returns a STRING, not a number. Two reasons, and both matter:
+ * The check is inside this function rather than beside it so that unvalidated
+ * digits cannot exist. There is no way to get a string out of here without it
+ * having passed, and `strict` mode forces every caller to deal with the null.
+ *
+ * Returns a STRING, not a number, when it succeeds. Two reasons, both matter:
  *
  *  - Leading zeros are part of the identity. Device "008800000001" is not the
  *    same thing as 8800000001, and a number would throw the zeros away.
  *  - A device id is a label, not a quantity. Nothing sensible happens if you
  *    add two of them together, so it should not be a type that allows it.
- */
-export function bcdToDigits(bytes: Buffer): string {
-  return bytes.toString('hex');
-}
-
-/**
- * Are these bytes valid BCD?
  *
- * A nibble can hold 0-15, but a decimal digit is only 0-9. Values 10-15 are
- * fine as hex and are not BCD at all, so a field containing one was either
- * never BCD or is corrupt.
- *
- * Because `bcdToDigits` renders as hex, an invalid nibble arrives as a letter
- * rather than a digit. This test rejects anything that is not all 0-9.
+ * Null rather than false: `false` answers a yes/no question, but the caller is
+ * asking for a value. Null is the ordinary way to say there is not one. It also
+ * stays distinguishable from the empty string, which is falsy too.
  */
-export function isValidBcd(bytes: Buffer): boolean {
-  return /^[0-9]*$/.test(bytes.toString('hex'));
+export function bcdToDigits(bytes: Buffer): string | null {
+  const digits = bytes.toString('hex');
+  return /^[0-9]*$/.test(digits) ? digits : null;
 }

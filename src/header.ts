@@ -20,7 +20,7 @@
  * WHERE it sits. That is why the offsets above are worth reading twice.
  */
 
-import { bcdToDigits, isValidBcd } from './bcd.ts';
+import { bcdToDigits } from './bcd.ts';
 
 /** The header is always exactly this long. The body starts right after it. */
 export const HEADER_LENGTH = 12;
@@ -107,10 +107,12 @@ export function decodeHeader(content: Buffer): HeaderResult {
   // Six bytes of BCD. subarray(4, 10) takes bytes 4,5,6,7,8,9 — the second
   // number is where it stops, not the last index it includes.
   const deviceBytes = content.subarray(4, 10);
+  const deviceId = bcdToDigits(deviceBytes);
 
-  // If a half-byte is not 0-9 then this is not BCD and we should say so rather
-  // than emit a device id with letters in it.
-  if (!isValidBcd(deviceBytes)) {
+  // Null means a half-byte was not 0-9, so this field is not BCD. Report it
+  // rather than emit a device id with letters in it. TypeScript will not let us
+  // past this point while deviceId might still be null.
+  if (deviceId === null) {
     return { kind: 'bad-device-id', bytes: deviceBytes.toString('hex') };
   }
 
@@ -120,7 +122,7 @@ export function decodeHeader(content: Buffer): HeaderResult {
     declaredBodyLength,
     encryption,
     isSubPackage,
-    deviceId: bcdToDigits(deviceBytes),
+    deviceId,
     serial: content.readUInt16BE(10),
   };
 
