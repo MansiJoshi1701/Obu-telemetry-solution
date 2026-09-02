@@ -7,7 +7,7 @@ could and could not account for.
 frames are unescaped and check-verified, headers are decoded, and the
 `0x0002` and `0x0102` bodies are decoded. Registration (`0x0100`) and location
 (`0x0200`) bodies are not decoded yet, which is why the undecoded byte count is
-still large. Parts 2 and 3 are not started.
+still large.
 
 ## Run it with Docker
 

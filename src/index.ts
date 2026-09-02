@@ -18,9 +18,7 @@ import { decodeHeader } from './03-header.ts';
 import { decodeBody } from './04-bodies.ts';
 import { RunReport } from './05-report.ts';
 
-// The dataset. Not a default and not a configurable input — these three files
-// are the entire data source the exercise provides, listed explicitly so it is
-// obvious what was parsed to produce the numbers below.
+// The dataset
 const CAPTURE_FILES = [
   'data/day1/capture-14.log',
   'data/day2/capture-13.log',
