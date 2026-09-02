@@ -3,11 +3,14 @@
 Parses JT/T 808 frames captured from bus on-board units, and reports what it
 could and could not account for.
 
-**Status: Part 1 in progress.** Steps 1-4 of 9 are done: the log files are read,
-frames are unescaped and check-verified, headers are decoded, and the
-`0x0002` and `0x0102` bodies are decoded. Registration (`0x0100`) and location
-(`0x0200`) bodies are not decoded yet, which is why the undecoded byte count is
-still large.
+**Status: Part 1 in progress.** Steps 1-5 of 9 are done: the log files are read,
+frames are unescaped and check-verified, headers are decoded, and the `0x0002`
+heartbeat, `0x0102` authentication and `0x0100` registration bodies are decoded.
+The location report (`0x0200`) is not decoded yet, which is why the undecoded
+byte count is still large.
+
+`NOTES.md` records what was found in the data and which decisions were judgement
+calls rather than instructions from the specification.
 
 ## Run it with Docker
 
@@ -39,16 +42,18 @@ npm install && npx tsc
 ```
 payload lines read   4969   header/hex line pairs found in the logs
 frames seen          4950   payloads that were really JT/T 808 frames
-bodies decoded       1173   bodies we have a decoder for
-no decoder yet       3777   bodies awaiting steps 5-8, or undocumented types
+bodies decoded       1565   bodies we have a decoder for
+no decoder yet       3385   bodies awaiting steps 6-8, or undocumented types
 check-code failures     0   frames whose XOR check did not match
-undecoded bytes    340169   body bytes not yet accounted for
+undecoded bytes    325273   body bytes not yet accounted for
+blank registrations       392 of 392, per the brief's warning
 anomalies                   only listed when they occur
 ```
 
-`undecoded bytes` is the number the exercise turns on, and it is meant to be
-honest rather than zero. It falls as steps 5-8 land. The floor is the three
-message ids that appear in no vendor document.
+`undecoded bytes` is the number that matters most for this exercise, and it is
+meant to be honest rather than zero. It falls as steps 6-8 land. The floor is
+2,665 — the three message ids that appear in no vendor document, whose bodies we
+decline to guess at.
 
 ## Layout
 
@@ -66,6 +71,7 @@ src/
   index.ts          the pipeline, and nothing else
 data/               the three capture files
 PROTOCOL.md         protocol reference
+NOTES.md            findings, judgement calls, known gaps
 ```
 
 Read `02-transport.ts` first. Everything downstream trusts it silently: if the

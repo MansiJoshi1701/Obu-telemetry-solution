@@ -21,7 +21,7 @@ import type { FrameResult } from './02-transport.ts';
 import type { FrameHeader, HeaderResult } from './03-header.ts';
 import type { DecodedBody } from './04-bodies.ts';
 import { formatMessageId } from './03-header.ts';
-import { messageName } from './04-bodies.ts';
+import { messageName, isBlankRegistration } from './04-bodies.ts';
 
 export class RunReport {
   // ---- transport ---------------------------------------------------------
@@ -42,6 +42,12 @@ export class RunReport {
   private bodiesDecoded = 0;
   private bodiesWithoutDecoder = 0;
   private undecodedBytes = 0;
+
+  // The brief warns that registration bodies decode to blanks because the
+  // identifying fields were stripped during anonymisation. These two turn that
+  // warning into something we measured rather than something we assumed.
+  private registrations = 0;
+  private blankRegistrations = 0;
 
   // ---- breakdowns --------------------------------------------------------
   //
@@ -136,6 +142,11 @@ export class RunReport {
     if (decoded.value === null) this.bodiesWithoutDecoder++;
     else this.bodiesDecoded++;
 
+    if (decoded.value?.type === 'registration') {
+      this.registrations++;
+      if (isBlankRegistration(decoded.value)) this.blankRegistrations++;
+    }
+
     if (decoded.undecodedBytes > 0) {
       this.undecodedBytes += decoded.undecodedBytes;
       RunReport.add(this.undecodedByMessageId, header.messageId, decoded.undecodedBytes);
@@ -157,6 +168,13 @@ export class RunReport {
     console.log(`  no decoder yet       ${this.bodiesWithoutDecoder}`);
     console.log(`  check-code failures  ${this.checkFailures}`);
     console.log(`  undecoded bytes      ${this.undecodedBytes}`);
+
+    if (this.registrations > 0) {
+      console.log(
+        `  blank registrations  ${this.blankRegistrations} of ${this.registrations}` +
+          ` (identifying fields stripped by anonymisation, per the brief)`,
+      );
+    }
 
     // Anything below is only worth a line when it actually happened. Printing a
     // column of permanent zeros buries the one number that ever changes.

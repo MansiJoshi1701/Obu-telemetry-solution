@@ -28,10 +28,11 @@ const CAPTURE_FILES = [
 const report = new RunReport();
 
 for (const file of CAPTURE_FILES) {
-  report.startFile(file);
+  report.startFile(file); // Setup the per-file counters - file name , payloads in current file & verified frames in current file.
 
   for (const record of readCaptureFile(file).records) {
-    report.countPayload();
+    // Step 1: Count the payload.
+    report.countPayload(); 
 
     // Step 2: is it a frame, does it unescape, does the check code match?
     const frame = readFrame(record.rawBytes);
