@@ -8,10 +8,10 @@
  * Step 4 handles the two simple ones:
  *
  *     0x0002  heartbeat       body is empty
- *     0x0102  authentication  body is an ASCII authentication code\
+ *     0x0102  authentication  body is an ASCII authentication code
  */
 
-import type { FrameHeader } from './header.ts';
+import type { FrameHeader } from './03-header.ts';
 
 /**
  * The decoded body, once we know what kind of message it is.
