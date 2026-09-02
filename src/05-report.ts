@@ -45,16 +45,17 @@ export class RunReport {
 
   // ---- breakdowns --------------------------------------------------------
   //
-  // A Map stores values under a key and lets you look them up again. These
-  // three exist because the summary numbers alone do not answer the questions
-  // an evaluator will ask next.
+  // A Map stores values under a key and lets you look them up again. These two
+  // exist because the summary numbers alone do not answer all the questions.
   //
   //   framesByMessageId    which kinds of message are in the data, and how many
   //   undecodedByMessageId WHERE the undecoded bytes are, not just how many
-  //   framesByDevice       per-device evidence for NOTES.md findings
+  //
+  // There is deliberately no per-device breakdown. Part 1 asks for totals "for
+  // the whole dataset"; per-device summaries are a Part 3 requirement, and
+  // Part 3 is out of scope here.
   private readonly framesByMessageId = new Map<number, number>();
   private readonly undecodedByMessageId = new Map<number, number>();
-  private readonly framesByDevice = new Map<string, number>();
 
   // ---- per file ----------------------------------------------------------
   private readonly perFile: { file: string; payloads: number; verified: number }[] = [];
@@ -124,7 +125,6 @@ export class RunReport {
     this.currentFileVerified++;
 
     RunReport.add(this.framesByMessageId, header.messageId, 1);
-    RunReport.add(this.framesByDevice, header.deviceId, 1);
 
     if (header.encryption !== 0) this.encrypted++;
     if (header.isSubPackage) this.subPackaged++;
@@ -185,10 +185,6 @@ export class RunReport {
       );
     }
 
-    console.log('\n  --- devices ---');
-    for (const [device, count] of [...this.framesByDevice].sort((a, b) => a[0].localeCompare(b[0]))) {
-      console.log(`  ${device}  ${String(count).padStart(5)} frames`);
-    }
     console.log('');
   }
 }
