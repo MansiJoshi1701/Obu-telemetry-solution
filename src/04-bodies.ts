@@ -19,10 +19,11 @@
 import type { FrameHeader } from './03-header.ts';
 
 import { bcdToDigits } from './bcd.ts';
+import { decodeAlarms, decodeStatus } from './flags.ts';
+import type { StatusFlags } from './flags.ts';
 
-/**
- * The decoded body, once we know what kind of message it is.
- */
+
+// The decoded body, once we know what kind of message it is.
 export type MessageBody =
   | { readonly type: 'heartbeat' }
   | { readonly type: 'authentication'; readonly authCode: string }
@@ -76,8 +77,8 @@ export function isBlankRegistration(r: RegistrationBody): boolean {
  *
  * Fixed part, from PROTOCOL.md. Offsets are into the body:
  *
- *     0   4 bytes   alarm word      bit flags  (named in step 7)
- *     4   4 bytes   status word     bit flags  (named in step 7)
+ *     0   4 bytes   alarm word      bit flags, expanded in flags.ts
+ *     4   4 bytes   status word     bit flags, expanded in flags.ts
  *     8   4 bytes   latitude        degrees x 1,000,000
  *     12  4 bytes   longitude       degrees x 1,000,000
  *     16  2 bytes   altitude        metres
@@ -89,9 +90,15 @@ export function isBlankRegistration(r: RegistrationBody): boolean {
 export interface LocationBody {
   readonly type: 'location';
 
-  /** Raw words. Step 7 expands these into named flags; here they are numbers. */
+  /** The raw words, kept so the named flags below can be checked against them. */
   readonly alarmWord: number;
   readonly statusWord: number;
+
+  /** Names of every alarm bit that is set. Empty when the word is 0. */
+  readonly alarms: readonly string[];
+
+  /** The status word expanded. `status.positioned` is the important one. */
+  readonly status: StatusFlags;
 
   /**
    * Degrees, signed. NULL — not 0 — when the device reports no GPS fix.
@@ -110,9 +117,6 @@ export interface LocationBody {
 
   /** The device's own clock reading. Null if the BCD was not valid. */
   readonly measuredAt: Date | null;
-
-  /** True when status bit 1 says the position is meaningful. */
-  readonly positioned: boolean;
 }
 
 export interface DecodedBody {
@@ -218,22 +222,6 @@ function decodeRegistration(body: Buffer): DecodedBody {
 /** The fixed part of a location body: offsets 0 to 27. Extension items follow. */
 const LOCATION_FIXED_LENGTH = 28;
 
-/**
- * Read bit `n` of a 32-bit word as a boolean, counting from 0 at the low end.
- *
- * Two steps: `>>> n` slides bit n down to position 0, then `& 1` discards every
- * other bit, so the result can only be 0 or 1.
- *
- * `>>>` is the unsigned right shift. Here it makes no difference to the answer,
- * because `& 1` masks away the only bits the signed and unsigned versions
- * disagree about. It is used as a habit: the moment a shifted value is read
- * WITHOUT a mask, `>>` on a word with the top bit set gives a negative number.
- *
- * Step 6 needs only bits 1, 2 and 3 (see below). Step 7 expands the rest.
- */
-function bit(word: number, n: number): boolean {
-  return ((word >>> n) & 1) === 1;
-}
 
 /**
  * Turn six BCD bytes of YYMMDDhhmmss into a Date.
@@ -280,14 +268,21 @@ function decodeLocation(body: Buffer): DecodedBody {
   }
 
   const statusWord = body.readUInt32BE(4);
+  const alarmWord = body.readUInt32BE(0);
+
+  // One expansion, used both for the coordinate signs below and by the caller.
+  // Step 6 read the three bits it needed individually here; going through
+  // decodeStatus means there is a single source of truth for what each bit
+  // means, instead of one reading in the decoder and another in the table.
+  const status = decodeStatus(statusWord);
 
   // Bit 1 is the one that decides whether the position means anything at all.
-  const positioned = bit(statusWord, 1);
+  const positioned = status.positioned;
 
   // The coordinate fields are UNSIGNED magnitudes — there is no minus sign in
   // the bytes. Which hemisphere you are in lives in status bits 2 and 3.
-  const southLatitude = bit(statusWord, 2);
-  const westLongitude = bit(statusWord, 3);
+  const southLatitude = status.southLatitude;
+  const westLongitude = status.westLongitude;
 
   // Stored as degrees x 1,000,000, so 28515124 is 28.515124 degrees.
   const rawLatitude = body.readUInt32BE(8) / 1_000_000;
@@ -296,9 +291,10 @@ function decodeLocation(body: Buffer): DecodedBody {
   return {
     value: {
       type: 'location',
-      alarmWord: body.readUInt32BE(0),
+      alarmWord,
       statusWord,
-      positioned,
+      alarms: decodeAlarms(alarmWord),
+      status,
 
       // No fix means we do not have a coordinate, not that the coordinate is 0.
       latitude: positioned ? (southLatitude ? -rawLatitude : rawLatitude) : null,

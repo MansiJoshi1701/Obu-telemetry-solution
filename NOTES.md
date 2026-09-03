@@ -4,9 +4,9 @@ Working notes, written as the parser is built. Every number below is produced by
 `npm run parse` or was measured with a throwaway script against the same data —
 none of it is read off the specification.
 
-**Status: Part 1, steps 1-6 of 9 done.** All four documented message types
-decode. The location report's alarm/status bits are not yet expanded into names,
-and its extension items are not yet decoded.
+**Status: Part 1, steps 1-7 of 9 done.** All four documented message types
+decode, and the alarm and status words are expanded into named flags. The
+location report's extension items are not yet decoded.
 
 ---
 
@@ -158,6 +158,43 @@ Decoded positions otherwise fall in a box of roughly 28.5077-28.5710 N,
 That is Delhi at city-bus speeds, which is what makes the field offsets
 believable: one byte of drift would have produced nonsense rather than something
 plausible.
+
+### Only 3 status bits and 1 alarm bit are ever set
+
+`PROTOCOL.md` warns in its Known gaps section that "most of the documented status
+and alarm bits are never set". Across all 3,102 location reports, the exact
+figures are:
+
+| Status word | Count | Bits set |
+|---|---|---|
+| `0x00040003` | 2952 | acc-on, positioned, gps-in-use |
+| `0x00040001` | 146 | acc-on, gps-in-use |
+| `0x00040000` | 2 | gps-in-use |
+| `0x00040002` | 2 | positioned, gps-in-use |
+
+| Alarm word | Count | Bits set |
+|---|---|---|
+| `0x00000000` | 2969 | none |
+| `0x00000010` | 133 | gnss-module-failure |
+
+So of roughly twenty documented status bits only three ever appear (0, 1 and 18),
+and of twenty-eight documented alarm bits only one (bit 4). Every other named
+flag in `flags.ts` is a code path this data never exercises.
+
+The two words are consistent with each other: all 133 GNSS-failure reports also
+have status bit 1 clear, so the device reports the fault and then declines to
+report a position rather than contradicting itself.
+
+Reserved bits are reported as `reserved-bit-N` rather than dropped, so a device
+setting one would be visible. None does.
+
+### Load state cannot be distinguished from "not implemented"
+
+Status bits 8-9 are `00` on every report, which the spec reads as "empty".
+Unlike the GPS case there is no second bit saying whether the sensor works, so
+"the bus is empty" and "the load sensor is not wired up" are indistinguishable
+here. Recorded because it is the same *zero is not a measurement* problem, in a
+case where the data cannot settle it.
 
 ### Device ids
 

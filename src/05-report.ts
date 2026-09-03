@@ -22,6 +22,7 @@ import type { FrameHeader, HeaderResult } from './03-header.ts';
 import type { DecodedBody } from './04-bodies.ts';
 import { formatMessageId } from './03-header.ts';
 import { messageName, isBlankRegistration } from './04-bodies.ts';
+import { decodeAlarms, describeStatus } from './flags.ts';
 
 export class RunReport {
   // ---- transport ---------------------------------------------------------
@@ -52,6 +53,12 @@ export class RunReport {
   // Evidence for storing coordinates as null rather than 0 when there is no fix.
   private locations = 0;
   private unpositioned = 0;
+
+  // Which distinct alarm and status words actually occur. PROTOCOL.md's Known
+  // gaps section warns that most documented bits are never set; these two turn
+  // that warning into a list we can point at.
+  private readonly statusWords = new Map<number, number>();
+  private readonly alarmWords = new Map<number, number>();
 
   // ---- breakdowns --------------------------------------------------------
   //
@@ -153,7 +160,9 @@ export class RunReport {
 
     if (decoded.value?.type === 'location') {
       this.locations++;
-      if (!decoded.value.positioned) this.unpositioned++;
+      if (!decoded.value.status.positioned) this.unpositioned++;
+      RunReport.add(this.statusWords, decoded.value.statusWord, 1);
+      RunReport.add(this.alarmWords, decoded.value.alarmWord, 1);
     }
 
     if (decoded.undecodedBytes > 0) {
@@ -206,6 +215,28 @@ export class RunReport {
     console.log(
       `  anomalies            ${anomalies.length === 0 ? 'none' : anomalies.join(', ')}`,
     );
+
+    // PROTOCOL.md's Known gaps section warns that most documented status and
+    // alarm bits are never set. Listing every distinct word that actually occurs
+    // turns that warning into something specific we can point at.
+    if (this.statusWords.size > 0) {
+      console.log('\n  --- status words seen ---');
+      for (const [word, n] of [...this.statusWords].sort((a, b) => b[1] - a[1])) {
+        console.log(
+          `  0x${word.toString(16).toUpperCase().padStart(8, '0')}  ${String(n).padStart(5)}  ` +
+            describeStatus(word).join(' '),
+        );
+      }
+
+      console.log('\n  --- alarm words seen ---');
+      for (const [word, n] of [...this.alarmWords].sort((a, b) => b[1] - a[1])) {
+        const names = decodeAlarms(word);
+        console.log(
+          `  0x${word.toString(16).toUpperCase().padStart(8, '0')}  ${String(n).padStart(5)}  ` +
+            (names.length === 0 ? 'no alarms' : names.join(' ')),
+        );
+      }
+    }
 
     console.log('\n  --- message types ---');
     for (const [id, count] of [...this.framesByMessageId].sort((a, b) => b[1] - a[1])) {

@@ -3,12 +3,10 @@
 Parses JT/T 808 frames captured from bus on-board units, and reports what it
 could and could not account for.
 
-**Status: Part 1 in progress.** Steps 1-6 of 9 are done. All four message types
-PROTOCOL.md documents now decode: `0x0002` heartbeat, `0x0102` authentication,
-`0x0100` registration, and the fixed fields of the `0x0200` location report
-(coordinates, speed, heading, altitude, timestamp). Still to come: naming the
-alarm and status bits, and the location report's extension items -- those items
-are the bulk of the remaining undecoded bytes.
+**Status: Part 1 in progress.** Steps 1-7 of 9 are done. All four message types
+PROTOCOL.md documents now decode, and the location report's alarm and status
+words are expanded into named flags. Still to come: the location report's
+extension items, which are the bulk of the remaining undecoded bytes.
 
 `NOTES.md` records what was found in the data and which decisions were judgement
 calls rather than instructions from the specification.
@@ -69,7 +67,8 @@ src/
   03-header.ts      message        ->  header fields + body
   04-bodies.ts      body           ->  decoded fields, per message id
   05-report.ts      all of it      ->  the run tally
-  bcd.ts            binary-coded decimal, used by 03 and later by 06
+  bcd.ts            binary-coded decimal, used by 03 and 04
+  flags.ts          alarm and status bit tables, used by 04
   index.ts          the pipeline, and nothing else
 data/               the three capture files
 PROTOCOL.md         protocol reference
