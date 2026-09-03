@@ -3,11 +3,12 @@
 Parses JT/T 808 frames captured from bus on-board units, and reports what it
 could and could not account for.
 
-**Status: Part 1 in progress.** Steps 1-5 of 9 are done: the log files are read,
-frames are unescaped and check-verified, headers are decoded, and the `0x0002`
-heartbeat, `0x0102` authentication and `0x0100` registration bodies are decoded.
-The location report (`0x0200`) is not decoded yet, which is why the undecoded
-byte count is still large.
+**Status: Part 1 in progress.** Steps 1-6 of 9 are done. All four message types
+PROTOCOL.md documents now decode: `0x0002` heartbeat, `0x0102` authentication,
+`0x0100` registration, and the fixed fields of the `0x0200` location report
+(coordinates, speed, heading, altitude, timestamp). Still to come: naming the
+alarm and status bits, and the location report's extension items -- those items
+are the bulk of the remaining undecoded bytes.
 
 `NOTES.md` records what was found in the data and which decisions were judgement
 calls rather than instructions from the specification.
@@ -42,16 +43,17 @@ npm install && npx tsc
 ```
 payload lines read   4969   header/hex line pairs found in the logs
 frames seen          4950   payloads that were really JT/T 808 frames
-bodies decoded       1565   bodies we have a decoder for
-no decoder yet       3385   bodies awaiting steps 6-8, or undocumented types
+bodies decoded       4667   bodies we have a decoder for
+no decoder yet        283   the three message ids in no vendor document
 check-code failures     0   frames whose XOR check did not match
-undecoded bytes    325273   body bytes not yet accounted for
+undecoded bytes    238417   body bytes not yet accounted for
 blank registrations       392 of 392, per the brief's warning
+no GPS fix                148 of 3102, stored as null rather than 0
 anomalies                   only listed when they occur
 ```
 
 `undecoded bytes` is the number that matters most for this exercise, and it is
-meant to be honest rather than zero. It falls as steps 6-8 land. The floor is
+meant to be honest rather than zero. It falls again as step 8 lands. The floor is
 2,665 — the three message ids that appear in no vendor document, whose bodies we
 decline to guess at.
 

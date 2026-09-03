@@ -4,8 +4,9 @@ Working notes, written as the parser is built. Every number below is produced by
 `npm run parse` or was measured with a throwaway script against the same data —
 none of it is read off the specification.
 
-**Status: Part 1, steps 1-5 of 9 done.** Registration and the simple bodies are
-decoded; the location report (`0x0200`) is not yet.
+**Status: Part 1, steps 1-6 of 9 done.** All four documented message types
+decode. The location report's alarm/status bits are not yet expanded into names,
+and its extension items are not yet decoded.
 
 ---
 
@@ -126,6 +127,38 @@ dataset; the other seven devices send between 1 and 3 each.
 is retrying registration forever waiting for an `0x8100` that never arrives. Real
 device behaviour, not a parser artifact.
 
+### The device clock and the collector clock share a timezone
+
+Comparing each GPS timestamp against its arrival time, both read as plain
+wall-clock readings, the smallest difference is **-2 seconds**. If the GPS
+reading were UTC while the collector logged in IST, every difference would sit
+near 19,800 seconds. It does not. So whatever zone the collector wrote in, the
+device's clock agrees with it.
+
+### Reports arrive long after they were measured
+
+The same comparison has a long tail: median 1,741 s and a maximum of 350,732 s
+(about four days) between a GPS timestamp and the arrival of a frame carrying it.
+Fresh reports arrive within seconds, so the tail is the device resending buffered
+records.
+
+This is direct evidence for the brief's Part 2 warning that the same record
+arrives many times and that arrival time is a trap for de-duplication: arrival
+time describes the network, not the measurement.
+
+### 148 location reports have no GPS fix
+
+Status bit 1 is clear on 148 of 3,102 location reports, and their coordinate
+bytes are zero. The parser stores `null`, not `0`. Storing zero would place those
+buses in the Atlantic off Ghana -- a real place on a real map, with no error
+raised anywhere.
+
+Decoded positions otherwise fall in a box of roughly 28.5077-28.5710 N,
+77.1514-77.2320 E, with a maximum speed of 40 km/h and altitudes near 214 m.
+That is Delhi at city-bus speeds, which is what makes the field offsets
+believable: one byte of drift would have produced nonsense rather than something
+plausible.
+
 ### Device ids
 
 Eight devices, numbered `…0001` and `…0003` through `…0009`. There is no
@@ -136,10 +169,12 @@ for dropped frames.
 
 ## Known gaps and assumptions
 
-- **Timezone.** The collector's arrival timestamps carry no timezone, so
-  `arrivedAt` is built in the local timezone of whatever machine runs the parser.
-  We are not guessing at the real one. This has to be settled before arrival
-  times are ever compared against the GPS timestamps inside `0x0200` bodies.
+- **Timezone.** Neither the collector's arrival timestamps nor the device's GPS
+  timestamps carry a timezone. We now know the two are in the *same* zone,
+  whichever it is (see the finding below), but not which zone that is. The GPS
+  timestamp is built with `Date.UTC` so the parsed value is identical on every
+  machine rather than varying with the parser's own clock; that is a labelling
+  choice for determinism, not a claim about the real zone.
 - **Whole files are read into memory.** Fine for these 1.1 MB captures. At the
   fleet scale the brief describes — roughly 39 KB per bus per hour, so about
   2 GB/day across 3,300 buses — this would need to stream instead.

@@ -5,13 +5,20 @@
  * message this is, and therefore how to read the body. This file is the place
  * that decision gets made.
  *
- * Step 4 handles the two simple ones:
+ * Decoders live here for the four message ids PROTOCOL.md documents:
  *
  *     0x0002  heartbeat       body is empty
  *     0x0102  authentication  body is an ASCII authentication code
+ *     0x0100  registration    fixed-offset fields, ASCII ones null-padded
+ *     0x0200  location        position, speed, heading, time, then TLV items
+ *
+ * The location report's extension items are not decoded yet; their bytes are
+ * reported as undecoded rather than skipped.
  */
 
 import type { FrameHeader } from './03-header.ts';
+
+import { bcdToDigits } from './bcd.ts';
 
 /**
  * The decoded body, once we know what kind of message it is.
@@ -19,7 +26,8 @@ import type { FrameHeader } from './03-header.ts';
 export type MessageBody =
   | { readonly type: 'heartbeat' }
   | { readonly type: 'authentication'; readonly authCode: string }
-  | RegistrationBody;
+  | RegistrationBody
+  | LocationBody;
 
 /**
  * 0x0100 — what a device says about itself when it registers.
@@ -63,6 +71,50 @@ export function isBlankRegistration(r: RegistrationBody): boolean {
   );
 }
 
+/**
+ * 0x0200 — where the bus is, how fast, which way, and when.
+ *
+ * Fixed part, from PROTOCOL.md. Offsets are into the body:
+ *
+ *     0   4 bytes   alarm word      bit flags  (named in step 7)
+ *     4   4 bytes   status word     bit flags  (named in step 7)
+ *     8   4 bytes   latitude        degrees x 1,000,000
+ *     12  4 bytes   longitude       degrees x 1,000,000
+ *     16  2 bytes   altitude        metres
+ *     18  2 bytes   speed           1/10 km/h
+ *     20  2 bytes   heading         degrees, 0 = north, clockwise
+ *     22  6 bytes   timestamp       BCD YYMMDDhhmmss
+ *     28  ..        extension items (step 8)
+ */
+export interface LocationBody {
+  readonly type: 'location';
+
+  /** Raw words. Step 7 expands these into named flags; here they are numbers. */
+  readonly alarmWord: number;
+  readonly statusWord: number;
+
+  /**
+   * Degrees, signed. NULL — not 0 — when the device reports no GPS fix.
+   *
+   * This is the "a zero is not a measurement" rule made unavoidable. When status
+   * bit 1 is clear the device is telling us it does not know where it is, and
+   * the coordinate bytes are zero. Storing 0.0 would place the bus in the
+   * Atlantic off Ghana. `number | null` forces every reader to handle that.
+   */
+  readonly latitude: number | null;
+  readonly longitude: number | null;
+
+  readonly altitudeM: number;
+  readonly speedKph: number;
+  readonly headingDeg: number;
+
+  /** The device's own clock reading. Null if the BCD was not valid. */
+  readonly measuredAt: Date | null;
+
+  /** True when status bit 1 says the position is meaningful. */
+  readonly positioned: boolean;
+}
+
 export interface DecodedBody {
   readonly value: MessageBody | null; // The decoded body, or null when we have no decoder for this message id
   readonly undecodedBytes: number; // Body bytes we could not account for.
@@ -103,6 +155,9 @@ export function decodeBody(header: FrameHeader, body: Buffer): DecodedBody {
 
     case 0x0100:
       return decodeRegistration(body);
+
+    case 0x0200:
+      return decodeLocation(body);
 
     default:
       // A message id we have no decoder for so report as undecoded.
@@ -158,3 +213,106 @@ function decodeRegistration(body: Buffer): DecodedBody {
     undecodedBytes: 0,
   };
 }
+
+
+/** The fixed part of a location body: offsets 0 to 27. Extension items follow. */
+const LOCATION_FIXED_LENGTH = 28;
+
+/**
+ * Read bit `n` of a 32-bit word as a boolean, counting from 0 at the low end.
+ *
+ * Two steps: `>>> n` slides bit n down to position 0, then `& 1` discards every
+ * other bit, so the result can only be 0 or 1.
+ *
+ * `>>>` is the unsigned right shift. Here it makes no difference to the answer,
+ * because `& 1` masks away the only bits the signed and unsigned versions
+ * disagree about. It is used as a habit: the moment a shifted value is read
+ * WITHOUT a mask, `>>` on a word with the top bit set gives a negative number.
+ *
+ * Step 6 needs only bits 1, 2 and 3 (see below). Step 7 expands the rest.
+ */
+function bit(word: number, n: number): boolean {
+  return ((word >>> n) & 1) === 1;
+}
+
+/**
+ * Turn six BCD bytes of YYMMDDhhmmss into a Date.
+ *
+ * This lives here rather than in bcd.ts on purpose: bcd.ts knows how to read
+ * digits out of bytes, and nothing more. That these particular six bytes mean a
+ * date, in that particular field order, is a fact about JT/T 808.
+ *
+ * Returns null rather than an Invalid Date.
+ */
+function bcdToDate(bytes: Buffer): Date | null {
+  const digits = bcdToDigits(bytes);
+
+  // Null already means "not valid BCD". We also need exactly 12 digits.
+  if (digits === null || digits.length !== 12) return null;
+
+  const yy = Number(digits.slice(0, 2));
+  const mm = Number(digits.slice(2, 4));
+  const dd = Number(digits.slice(4, 6));
+  const hh = Number(digits.slice(6, 8));
+  const mi = Number(digits.slice(8, 10));
+  const ss = Number(digits.slice(10, 12));
+
+  // Valid BCD digits can still be an impossible date, e.g. month 99.
+  if (mm < 1 || mm > 12 || dd < 1 || dd > 31 || hh > 23 || mi > 59 || ss > 59) {
+    return null;
+  }
+
+  // Two-digit year, no century field in the protocol. These captures are from
+  // 2026, so 2000 + yy.
+  //
+  // Date.UTC, not the local-time constructor: the protocol does not say what
+  // timezone this reading is in, and building it in UTC at least makes the
+  // result the same on every machine. See NOTES.md — the wall-clock reading is
+  // what the device sent; the label we put on it is our choice, not a finding.
+  return new Date(Date.UTC(2000 + yy, mm - 1, dd, hh, mi, ss));
+}
+
+function decodeLocation(body: Buffer): DecodedBody {
+
+  // Too short to hold even the fixed part. Report all of it.
+  if (body.length < LOCATION_FIXED_LENGTH) {
+    return { value: null, undecodedBytes: body.length };
+  }
+
+  const statusWord = body.readUInt32BE(4);
+
+  // Bit 1 is the one that decides whether the position means anything at all.
+  const positioned = bit(statusWord, 1);
+
+  // The coordinate fields are UNSIGNED magnitudes — there is no minus sign in
+  // the bytes. Which hemisphere you are in lives in status bits 2 and 3.
+  const southLatitude = bit(statusWord, 2);
+  const westLongitude = bit(statusWord, 3);
+
+  // Stored as degrees x 1,000,000, so 28515124 is 28.515124 degrees.
+  const rawLatitude = body.readUInt32BE(8) / 1_000_000;
+  const rawLongitude = body.readUInt32BE(12) / 1_000_000;
+
+  return {
+    value: {
+      type: 'location',
+      alarmWord: body.readUInt32BE(0),
+      statusWord,
+      positioned,
+
+      // No fix means we do not have a coordinate, not that the coordinate is 0.
+      latitude: positioned ? (southLatitude ? -rawLatitude : rawLatitude) : null,
+      longitude: positioned ? (westLongitude ? -rawLongitude : rawLongitude) : null,
+
+      altitudeM: body.readUInt16BE(16),
+      speedKph: body.readUInt16BE(18) / 10, // sent as 1/10 km/h
+      headingDeg: body.readUInt16BE(20),
+      measuredAt: bcdToDate(body.subarray(22, 28)),
+    },
+
+    // Everything from offset 28 on is the extension items, which step 8 decodes.
+    // Until then those bytes are honestly reported as unaccounted for.
+    undecodedBytes: body.length - LOCATION_FIXED_LENGTH,
+  };
+}
+

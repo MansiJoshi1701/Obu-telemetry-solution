@@ -49,6 +49,10 @@ export class RunReport {
   private registrations = 0;
   private blankRegistrations = 0;
 
+  // Evidence for storing coordinates as null rather than 0 when there is no fix.
+  private locations = 0;
+  private unpositioned = 0;
+
   // ---- breakdowns --------------------------------------------------------
   //
   // A Map stores values under a key and lets you look them up again. These two
@@ -147,6 +151,11 @@ export class RunReport {
       if (isBlankRegistration(decoded.value)) this.blankRegistrations++;
     }
 
+    if (decoded.value?.type === 'location') {
+      this.locations++;
+      if (!decoded.value.positioned) this.unpositioned++;
+    }
+
     if (decoded.undecodedBytes > 0) {
       this.undecodedBytes += decoded.undecodedBytes;
       RunReport.add(this.undecodedByMessageId, header.messageId, decoded.undecodedBytes);
@@ -173,6 +182,13 @@ export class RunReport {
       console.log(
         `  blank registrations  ${this.blankRegistrations} of ${this.registrations}` +
           ` (identifying fields stripped by anonymisation, per the brief)`,
+      );
+    }
+
+    if (this.locations > 0) {
+      console.log(
+        `  no GPS fix           ${this.unpositioned} of ${this.locations} locations` +
+          ` (coordinates stored as null, not 0)`,
       );
     }
 
