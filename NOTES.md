@@ -4,9 +4,10 @@ Working notes, written as the parser is built. Every number below is produced by
 `npm run parse` or was measured with a throwaway script against the same data —
 none of it is read off the specification.
 
-**Status: Part 1, steps 1-7 of 9 done.** All four documented message types
-decode, and the alarm and status words are expanded into named flags. The
-location report's extension items are not yet decoded.
+**Status: Part 1 decoding complete (steps 1-8 of 9).** All four documented
+message types decode, the alarm and status words are expanded into named flags,
+and the location report's extension items are split into id, length and value
+with the documented ids decoded.
 
 ---
 
@@ -195,6 +196,81 @@ Unlike the GPS case there is no second bit saying whether the sensor works, so
 "the bus is empty" and "the load sensor is not wired up" are indistinguishable
 here. Recorded because it is the same *zero is not a measurement* problem, in a
 case where the data cannot settle it.
+
+### Extension items: three different findings, kept apart
+
+Every one of the 3,102 location reports carries the **same 17 extension items**,
+in the same order. The brief insists that "the document reserves this id" and
+"the document has never heard of this id" are different claims, so the parser
+tags them separately:
+
+| Bucket | Ids | Count |
+|---|---|---|
+| Documented and decoded | `0x01` `0x03` `0x25` `0x30` `0x31` | 5 |
+| In a range the spec marks **Reserved** (`0x14`-`0x24`) | `0x14` `0x15` `0x16` `0x17` `0x18` `0x1A` `0x24` | 7 |
+| **Mentioned nowhere** in the spec | `0x28` `0x41` `0x42` `0x43` `0x50` | 5 |
+
+The last five fall outside both the reserved ranges *and* the `0xE1`-`0xFF`
+custom area the spec leaves free for implementers. The vendor is using id space
+the document does not account for at all.
+
+**Documented ids that never appear:** `0x02` fuel, `0x04` manual alarm, `0x11`,
+`0x12`, `0x13`, `0x2A`, `0x2B`, `0xE0`. Their decoders are written and completely
+untested by real data.
+
+We do not decode `0x11`, `0x12`, `0x13` or `0xE0` even though the spec lists
+them: they are documented as *existing* rather than described well enough to
+decode, and guessing at their internals is the fabrication the brief warns
+against.
+
+### One undocumented field causes nearly all the escaping
+
+Extension `0x41` takes exactly two values, `0x0080` and **`0x007E`**. `0x7E` is
+the frame marker, so whenever that field holds `007E` the device must send it as
+`7D 02`.
+
+- Location reports containing an escape: **1,820**
+- Of those, reports where `0x41` == `007E`: **1,803**
+
+So essentially all the escaping in this dataset traces to one two-byte field that
+appears in no vendor document, whose value happens to collide with the frame
+delimiter.
+
+### 12 of 17 extension ids never vary
+
+Constant across all 3,102 reports: `0x14` `0x15` `0x16` `0x24` `0x25` = `00000000`,
+`0x17` `0x18` `0x43` `0x50` = `0000`, `0x28` `0x30` = `00`, and `0x1A` = `01`.
+
+The sharpest case is **`0x30`, wireless signal strength — documented, decoded,
+and always zero.** A device transmitting over a mobile network cannot have zero
+signal, so this reads as a field that is not wired up rather than a measurement
+of nothing.
+
+That gives three states a Part 2 schema would have to keep apart:
+
+| State | Example |
+|---|---|
+| measured, varies | `0x01` mileage, 95.2 to 38,598.4 km, 403 distinct values |
+| sent but never varies | `0x30` signal strength, always 0 |
+| never sent at all | `0x02` fuel, absent entirely |
+
+**Fields that do vary**, and are therefore candidates for a Part 3 time series:
+`0x01` mileage (403 distinct, monotonic per device), `0x03` recorder speed (36),
+`0x31` satellite count (0-16, 8 distinct), `0x42` (7), `0x41` (2).
+
+### Two byte counts, reported separately
+
+The run reports two numbers rather than one, because they are different
+admissions:
+
+- **`undecoded bytes` = 2,665.** Bytes with no account at all -- the bodies of
+  the three message ids no vendor document describes.
+- **`uninterpreted bytes` = 93,060.** TLV values we located exactly (id, length,
+  offset all known, raw bytes kept) but whose meaning we do not know.
+
+Together, **95,725 bytes are not claimed as understood**. Folding them into one
+figure would hide the difference between "we could not parse this" and "we parsed
+it and cannot read it".
 
 ### Device ids
 

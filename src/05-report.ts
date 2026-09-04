@@ -23,6 +23,7 @@ import type { DecodedBody } from './04-bodies.ts';
 import { formatMessageId } from './03-header.ts';
 import { messageName, isBlankRegistration } from './04-bodies.ts';
 import { decodeAlarms, describeStatus } from './flags.ts';
+import type { Classification } from './extensions.ts';
 
 export class RunReport {
   // ---- transport ---------------------------------------------------------
@@ -59,6 +60,25 @@ export class RunReport {
   // that warning into a list we can point at.
   private readonly statusWords = new Map<number, number>();
   private readonly alarmWords = new Map<number, number>();
+
+  // TLV value bytes we split out correctly but did not interpret. Kept apart
+  // from undecodedBytes on purpose; see the note where it is incremented.
+  private uninterpretedValueBytes = 0;
+  private readonly uninterpretedByExtensionId = new Map<number, number>();
+
+  // Every extension id seen, with how often, how the spec classifies it, whether
+  // we decoded its value, and how many distinct values it ever took. That last
+  // one matters: a field that never changes is not the same as a measurement.
+  private readonly extensionIds = new Map<
+    number,
+    {
+      count: number;
+      classification: Classification;
+      name: string | undefined;
+      lengths: Set<number>;
+      distinctValues: Set<string>;
+    }
+  >();
 
   // ---- breakdowns --------------------------------------------------------
   //
@@ -163,6 +183,36 @@ export class RunReport {
       if (!decoded.value.status.positioned) this.unpositioned++;
       RunReport.add(this.statusWords, decoded.value.statusWord, 1);
       RunReport.add(this.alarmWords, decoded.value.alarmWord, 1);
+
+      for (const item of decoded.value.extensions) {
+        let seen = this.extensionIds.get(item.id);
+        if (seen === undefined) {
+          seen = {
+            count: 0,
+            classification: item.classification,
+            name: item.decoded?.name,
+            lengths: new Set<number>(),
+            distinctValues: new Set<string>(),
+          };
+          this.extensionIds.set(item.id, seen);
+        }
+        seen.count++;
+        seen.lengths.add(item.length);
+        seen.distinctValues.add(item.raw.toString('hex'));
+
+        // An item with no decoder is structurally accounted for -- we know its
+        // id, its length and its value bytes -- but its MEANING is unknown. Those
+        // bytes are counted separately from undecodedBytes rather than folded
+        // into it, because the two are different admissions:
+        //
+        //   undecodedBytes         we could not account for these bytes at all
+        //   uninterpretedValueBytes  we know exactly what these bytes are and
+        //                            where they sit, but not what they mean
+        if (item.decoded === undefined) {
+          this.uninterpretedValueBytes += item.raw.length;
+          RunReport.add(this.uninterpretedByExtensionId, item.id, item.raw.length);
+        }
+      }
     }
 
     if (decoded.undecodedBytes > 0) {
@@ -186,6 +236,20 @@ export class RunReport {
     console.log(`  no decoder yet       ${this.bodiesWithoutDecoder}`);
     console.log(`  check-code failures  ${this.checkFailures}`);
     console.log(`  undecoded bytes      ${this.undecodedBytes}`);
+
+    // Two different admissions, reported separately rather than added together.
+    // undecodedBytes  = bytes with no account at all.
+    // uninterpreted   = bytes we located exactly but whose meaning is unknown.
+    if (this.uninterpretedValueBytes > 0) {
+      console.log(
+        `  uninterpreted bytes  ${this.uninterpretedValueBytes}` +
+          ` (TLV values split out correctly, meaning not decoded)`,
+      );
+      console.log(
+        `  fully explained      ${this.undecodedBytes + this.uninterpretedValueBytes}` +
+          ` bytes are NOT claimed as understood`,
+      );
+    }
 
     if (this.registrations > 0) {
       console.log(
@@ -236,6 +300,34 @@ export class RunReport {
             (names.length === 0 ? 'no alarms' : names.join(' ')),
         );
       }
+    }
+
+    if (this.extensionIds.size > 0) {
+      console.log('\n  --- location extension items ---');
+      console.log('  id    count  len  distinct  uninterp  spec            decoded as');
+      for (const [id, e] of [...this.extensionIds].sort((a, b) => a[0] - b[0])) {
+        const uninterp = this.uninterpretedByExtensionId.get(id) ?? 0;
+        console.log(
+          '  0x' +
+            id.toString(16).toUpperCase().padStart(2, '0') +
+            String(e.count).padStart(7) +
+            [...e.lengths].join('/').padStart(5) +
+            String(e.distinctValues.size).padStart(10) +
+            (uninterp === 0 ? '         -' : String(uninterp).padStart(10)) +
+            '  ' +
+            e.classification.padEnd(14) +
+            '  ' +
+            (e.name ?? '-- value not decoded --'),
+        );
+      }
+
+      // A field that never changes is not the same thing as a measurement.
+      // Listing them here is the evidence for that claim in NOTES.md.
+      const constant = [...this.extensionIds].filter(([, e]) => e.distinctValues.size === 1);
+      console.log(
+        `\n  ${constant.length} of ${this.extensionIds.size} extension ids never vary: ` +
+          constant.map(([id]) => '0x' + id.toString(16).toUpperCase().padStart(2, '0')).join(' '),
+      );
     }
 
     console.log('\n  --- message types ---');

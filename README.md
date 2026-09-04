@@ -3,10 +3,11 @@
 Parses JT/T 808 frames captured from bus on-board units, and reports what it
 could and could not account for.
 
-**Status: Part 1 in progress.** Steps 1-7 of 9 are done. All four message types
-PROTOCOL.md documents now decode, and the location report's alarm and status
-words are expanded into named flags. Still to come: the location report's
-extension items, which are the bulk of the remaining undecoded bytes.
+**Status: Part 1 decoding is complete.** All four message types PROTOCOL.md
+documents are decoded, the alarm and status words are expanded into named flags,
+and the location report's extension items are split into id, length and value
+with the documented ids decoded. Parts 2 and 3 are not started, and tests are out
+of scope for this submission.
 
 `NOTES.md` records what was found in the data and which decisions were judgement
 calls rather than instructions from the specification.
@@ -44,16 +45,18 @@ frames seen          4950   payloads that were really JT/T 808 frames
 bodies decoded       4667   bodies we have a decoder for
 no decoder yet        283   the three message ids in no vendor document
 check-code failures     0   frames whose XOR check did not match
-undecoded bytes    238417   body bytes not yet accounted for
+undecoded bytes      2665   bytes with no account at all
+uninterpreted bytes 93060   TLV values located exactly, meaning not decoded
 blank registrations       392 of 392, per the brief's warning
 no GPS fix                148 of 3102, stored as null rather than 0
 anomalies                   only listed when they occur
 ```
 
-`undecoded bytes` is the number that matters most for this exercise, and it is
-meant to be honest rather than zero. It falls again as step 8 lands. The floor is
-2,665 — the three message ids that appear in no vendor document, whose bodies we
-decline to guess at.
+The last two are the numbers that matter most, and they are deliberately not
+added together. `undecoded bytes` is what we could not account for at all;
+`uninterpreted bytes` is what we located exactly but cannot read the meaning of.
+Together, 95,725 bytes are not claimed as understood. Both are meant to be
+honest rather than zero.
 
 ## Layout
 
@@ -69,6 +72,7 @@ src/
   05-report.ts      all of it      ->  the run tally
   bcd.ts            binary-coded decimal, used by 03 and 04
   flags.ts          alarm and status bit tables, used by 04
+  extensions.ts     the TLV items on a location report, used by 04
   index.ts          the pipeline, and nothing else
 data/               the three capture files
 PROTOCOL.md         protocol reference

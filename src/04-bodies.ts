@@ -12,8 +12,8 @@
  *     0x0100  registration    fixed-offset fields, ASCII ones null-padded
  *     0x0200  location        position, speed, heading, time, then TLV items
  *
- * The location report's extension items are not decoded yet; their bytes are
- * reported as undecoded rather than skipped.
+ * The bit tables live in flags.ts and the TLV parsing in extensions.ts, so this
+ * file stays a set of field layouts rather than field layouts plus lookup tables.
  */
 
 import type { FrameHeader } from './03-header.ts';
@@ -21,6 +21,8 @@ import type { FrameHeader } from './03-header.ts';
 import { bcdToDigits } from './bcd.ts';
 import { decodeAlarms, decodeStatus } from './flags.ts';
 import type { StatusFlags } from './flags.ts';
+import { parseExtensions } from './extensions.ts';
+import type { ExtensionItem } from './extensions.ts';
 
 
 // The decoded body, once we know what kind of message it is.
@@ -85,7 +87,7 @@ export function isBlankRegistration(r: RegistrationBody): boolean {
  *     18  2 bytes   speed           1/10 km/h
  *     20  2 bytes   heading         degrees, 0 = north, clockwise
  *     22  6 bytes   timestamp       BCD YYMMDDhhmmss
- *     28  ..        extension items (step 8)
+ *     28  ..        extension items, TLV (see extensions.ts)
  */
 export interface LocationBody {
   readonly type: 'location';
@@ -117,6 +119,13 @@ export interface LocationBody {
 
   /** The device's own clock reading. Null if the BCD was not valid. */
   readonly measuredAt: Date | null;
+
+  /**
+   * The TLV items from offset 28 onwards, split into id, length and value.
+   * Values are decoded only for the ids PROTOCOL.md documents; every item keeps
+   * its raw bytes either way.
+   */
+  readonly extensions: readonly ExtensionItem[];
 }
 
 export interface DecodedBody {
@@ -288,6 +297,8 @@ function decodeLocation(body: Buffer): DecodedBody {
   const rawLatitude = body.readUInt32BE(8) / 1_000_000;
   const rawLongitude = body.readUInt32BE(12) / 1_000_000;
 
+  const { items, trailingBytes } = parseExtensions(body.subarray(LOCATION_FIXED_LENGTH));
+
   return {
     value: {
       type: 'location',
@@ -304,11 +315,13 @@ function decodeLocation(body: Buffer): DecodedBody {
       speedKph: body.readUInt16BE(18) / 10, // sent as 1/10 km/h
       headingDeg: body.readUInt16BE(20),
       measuredAt: bcdToDate(body.subarray(22, 28)),
+      extensions: items,
     },
 
-    // Everything from offset 28 on is the extension items, which step 8 decodes.
-    // Until then those bytes are honestly reported as unaccounted for.
-    undecodedBytes: body.length - LOCATION_FIXED_LENGTH,
+    // Every item that parsed is accounted for: we know its id, its length and
+    // its value bytes, which is what the brief asks for. Only a tail too short
+    // or inconsistent to form a complete item is left unaccounted.
+    undecodedBytes: trailingBytes,
   };
 }
 
