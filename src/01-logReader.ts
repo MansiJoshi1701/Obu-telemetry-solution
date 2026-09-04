@@ -1,5 +1,5 @@
 /**
- * Step 1 — reading the collector's log files.
+ * Reading the collector's log files.
  *
  * This file's only job is to turn the received text into a list of records with real
  * bytes in them.

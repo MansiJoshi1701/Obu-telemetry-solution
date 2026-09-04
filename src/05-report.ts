@@ -125,7 +125,7 @@ export class RunReport {
     this.currentFilePayloads++;
   }
 
-  /** A payload that did not survive step 2. */
+  /** A payload that did not survive the transport checks. */
   frameRejected(result: FrameResult, where: string): void {
     switch (result.kind) {
       case 'not-a-frame':

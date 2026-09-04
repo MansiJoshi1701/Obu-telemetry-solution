@@ -1,7 +1,7 @@
 /**
- * Step 3 — the frame header.
+ * The frame header.
  *
- * Step 2 handed us a verified message: the escaping is undone and the check byte
+ * The transport layer hands us a verified message: the escaping is undone and the check byte
  * matched. That message is laid out as a fixed 12-byte header followed by the
  * body. This step reads the header fields and checks them for plausibility.
  */
@@ -30,7 +30,7 @@ export type HeaderResult =
 /**
  * Split a verified message into its header fields and its body.
  *
- * `content` is the `content` from step 2's VerifiedFrame: unescaped, and with
+ * `content` is the `content` of a VerifiedFrame: unescaped, and with
  * the check byte already removed.
  */
 export function decodeHeader(content: Buffer): HeaderResult {

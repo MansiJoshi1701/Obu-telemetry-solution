@@ -1,7 +1,7 @@
 /**
- * Steps 4 onwards — decoding the body.
+ * Decoding the body.
  *
- * Step 3 gave us a header and a body. The header's message id says what kind of
+ * The header decoder gave us a header and a body. The header's message id says what kind of
  * message this is, and therefore how to read the body. This file is the place
  * that decision gets made.
  *
@@ -280,7 +280,7 @@ function decodeLocation(body: Buffer): DecodedBody {
   const alarmWord = body.readUInt32BE(0);
 
   // One expansion, used both for the coordinate signs below and by the caller.
-  // Step 6 read the three bits it needed individually here; going through
+  // Reading the three bits we need individually would work, but going through
   // decodeStatus means there is a single source of truth for what each bit
   // means, instead of one reading in the decoder and another in the table.
   const status = decodeStatus(statusWord);

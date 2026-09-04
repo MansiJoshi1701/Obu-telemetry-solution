@@ -1,7 +1,7 @@
 /**
- * Step 2 — the transport layer.
+ * The transport layer.
  *
- * A payload from Step 1 is the raw bytes the collector received. Before anyone
+ * A payload from the log reader is the raw bytes the collector received. Before anyone
  * can read fields out of it, three things have to happen:
  *
  *   1. confirm it really is a frame (starts and ends with the marker 0x7E)

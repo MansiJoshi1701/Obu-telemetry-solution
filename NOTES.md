@@ -4,10 +4,11 @@ Working notes, written as the parser is built. Every number below is produced by
 `npm run parse` or was measured with a throwaway script against the same data —
 none of it is read off the specification.
 
-**Status: Part 1 decoding complete (steps 1-8 of 9).** All four documented
-message types decode, the alarm and status words are expanded into named flags,
-and the location report's extension items are split into id, length and value
-with the documented ids decoded.
+**Status: Part 1 complete.** All four documented message types decode, the alarm
+and status words are expanded into named flags, and the location report's
+extension items are split into id, length and value with the documented ids
+decoded. Parts 2 and 3 are not built; the design work for Part 2 and the volume
+arithmetic are at the end of this file. Tests are out of scope by agreement.
 
 ---
 
@@ -93,9 +94,49 @@ and attempting a TLS `ClientHello`. Neither day-2 capture contains any.
 | `0x0FF0` | 3 | Not decoded |
 | `0x0107` | 2 | Not decoded |
 
-These are kept as verified frames with the body reported as undecoded. We have
-not guessed at field layouts for them. They account for 2,665 bytes, which is the
-floor the undecoded count can reach once the location decoder lands.
+These are kept as verified frames with the body reported as undecoded. They
+account for the 2,665 undecoded bytes. What follows is what we found by looking
+at them, not what the parser claims to know -- none of it is implemented.
+
+**`0x0FF0` — 3 frames, 24 bytes each, from devices `…0004` and `…0008`.**
+The first 12 bytes read as two valid BCD `YYMMDDhhmmss` timestamps:
+
+| t1 | t2 | arrived | tail |
+|---|---|---|---|
+| 26-08-04 07:45:24 | 26-08-04 13:28:47 | 13:28:51 | all zero |
+| 26-08-04 08:01:12 | 26-08-04 13:38:51 | 13:38:54 | all zero |
+| 26-08-04 07:43:18 | 26-08-04 14:26:27 | 14:26:29 | `0x3A` at offset 19 |
+
+In all three the second timestamp is 2-4 seconds before the frame arrived, and
+the first is early that morning. That is consistent with a session or trip
+summary carrying a start time and a current time, and the 12-byte tail with one
+non-zero byte in one frame is consistent with counters.
+
+**Consistent with is not the same as confirmed.** Three samples, no vendor
+document, and no way to check the reading against anything. Not implemented.
+
+**`0x0107` — 2 frames, 50 and 41 bytes, from devices `…0007` and `…0008`.**
+The body walks cleanly as TLV with a one-byte id and a one-byte length — the
+same shape as the location report's extension items:
+
+```
+id=0x07 len= 1  01
+id=0x00 len= 2  0100
+id=0x03 len=20  "89910000000000000001"      <- an ICCID
+id=0x0A len=10  "DL0PA0001X"                <- a registration plate
+id=0x0B len= 1  00
+id=0x0C len= 1  00
+id=0x0D len= 1  00
+```
+
+The evidence for the structure is strong: **two bodies of different lengths, 50
+and 41, both consumed exactly, with 0 bytes left over.** A wrong structure would
+almost certainly overrun or leave a remainder on at least one of them. The second
+frame differs only in `0x0A`, which is 1 zero byte instead of a plate string.
+
+What the ids *mean* is inference from their contents, not from any document, so
+the parser does not name them. Both values look like pseudonyms of the kind the
+brief describes.
 
 `0x0B12` is also where the escaping shows up most vividly: the closing brace of
 the JSON is byte `0x7D`, which is the protocol's own escape marker, so the device
@@ -296,10 +337,112 @@ for dropped frames.
   run reports every distinct authentication code seen, which would make such
   corruption visible instead of hidden.
 
+---
+
+## Part 2, designed but not built
+
+Part 2 is not implemented. The brief asks for a schema, a de-duplication key and
+the volume arithmetic, so what follows is the design and the evidence for it
+rather than a description of code that exists.
+
+### De-duplication key: `(device_id, message_type, gps_timestamp)`
+
+The brief says arrival time and message serial number are both traps. They are,
+for opposite reasons, and both are measurable in this data.
+
+**Arrival time fails because it describes the network, not the measurement.**
+2,263 of the 4,969 payload lines — 45% — are byte-identical repeats. The same
+measurement arriving twice gets two different arrival times, so arrival time
+makes duplicates look distinct. It is also not stable across a re-ingest.
+
+**The serial number fails worse, because it makes distinct records look
+identical.** Devices reconnect and restart the counter. Measured per device:
+
+| Device | Frames | Distinct serials | Times the serial went *down* |
+|---|---|---|---|
+| `…0001` | 237 | 160 | 38 |
+| `…0003` | 997 | 487 | 104 |
+| `…0004` | 874 | 360 | 98 |
+| `…0006` | 822 | 406 | 86 |
+| `…0008` | 768 | 233 | 85 |
+| `…0009` | 712 | 325 | 77 |
+
+A counter that decreases 104 times is not an identifier.
+
+**Tested on the 3,102 location reports:**
+
+| Candidate key | Groups | Groups containing genuinely *different* bodies |
+|---|---|---|
+| `device + gps_timestamp` | 896 | **0** |
+| `device + serial` | 842 | **55** |
+
+`device + serial` would silently merge 55 pairs of real, distinct measurements.
+`device + gps_timestamp` merges nothing that differs anywhere in this dataset.
+
+Message type is in the key because a heartbeat and a location report from the
+same device in the same second are different facts.
+
+**Unresolved:** heartbeats and registrations carry no GPS timestamp, so this key
+does not extend to them. The options are a separate table per message type, or
+falling back to a hash of the frame body. Not decided, and it would be dishonest
+to present the key as complete when a third of the frames fall outside it.
+
+### Distinguishing "measured as zero" from "never measured"
+
+Three states have to survive into storage, and the data contains all three:
+
+| State | Example | Proposed storage |
+|---|---|---|
+| Measured, varies | `0x01` mileage, 403 distinct values | a column, `NOT NULL` |
+| Measured but constant | `0x30` signal strength, always `0` | a column, value `0` |
+| Never sent | `0x02` fuel, absent entirely | `NULL` |
+| No fix, so not measurable | lat/lon on 148 reports | `NULL`, never `0` |
+
+The rule: **`NULL` means the device did not tell us; a value means it did.** The
+parser already enforces this at the type level — `latitude: number | null` cannot
+be read without handling the null case.
+
+Storing the 17 extension items as 17 columns per row would mean writing 12
+constant values on every row forever. A key/value child table keyed on
+`(device_id, gps_timestamp, extension_id)`, holding the raw bytes plus the
+decoded value where we have one, keeps the "never sent" case naturally as an
+absent row.
+
+### Volume at 3,300 buses
+
+Measured from the busiest capture hour, `data/day2/capture-14.log`: 3,203
+payloads and 275,167 bytes in one hour from 8 devices.
+
+| | |
+|---|---|
+| Per bus per hour | ~400 frames, ~34 KB |
+| Per bus per 16-hour day | ~6,400 frames, ~550 KB |
+| 3,300 buses per day | ~21 million frames, ~1.8 GB |
+| One year | **~7.7 billion frames, ~660 GB of raw payload** |
+
+Those are pre-de-duplication figures, and 45% of payloads here are exact repeats,
+so the stored row count would be nearer 4 billion a year.
+
+**Where the design breaks:**
+
+- Reading whole files into memory, which `01-logReader.ts` does, stops working
+  the moment a capture is larger than RAM. It has to become a streaming read.
+- A single table at 4 billion rows a year needs time partitioning to keep the
+  de-duplication index from dominating write cost. Monthly partitions on
+  `gps_timestamp` would keep each index to a workable size.
+- The de-duplication check is a lookup on every insert. At 21 million frames a
+  day that is the hot path, and it is the first thing that would need batching
+  rather than row-at-a-time inserts.
+- 12 of 17 extension items never vary. Storing them per row wastes roughly
+  70% of the extension table. They belong in a per-device table that records
+  the constant, with the child table holding only what changes.
+
+---
+
 ## Not done
 
-- Steps 6-8: the `0x0200` location body — fixed fields, alarm and status bit
-  flags, coordinate conversion, and the extension items.
-- Step 9: the final tally and a `0x0FF0` / `0x0107` write-up.
+- Decoding the bodies of `0x0B12`, `0x0FF0` and `0x0107`. What we found by
+  inspecting them is written up above; none of it is implemented, because
+  naming fields on 2 or 3 samples with no vendor document would be a guess.
 - Part 2 (store) and Part 3 (render).
 - Tests, which are out of scope for this submission by agreement.
